@@ -12,11 +12,14 @@ import csv
 import matplotlib.pyplot as plt
 import os
 from xgboost import XGBClassifier
+from sklearn.model_selection import GridSearchCV
 from xgboost import plot_tree
 from xgboost import plot_importance
 from sklearn.tree import DecisionTreeClassifier # Import Decision Tree Classifier
 from sklearn.tree import DecisionTreeRegressor
 from pylab import rcParams
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import mean_absolute_error
 os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
 
 
@@ -42,6 +45,67 @@ def get_last_date(df):
     return last_day
 
 
+def exponentialLoss(y, pred):
+    df = -y * np.exp(-y * pred)
+    hess = np.exp(-y * pred)
+    return df, hess
+
+
+def grid_search(X_data,Y_data):
+    len_X = X_data.shape[1] - Y_data.shape[1]
+    Y = X_data.iloc[:, -1]
+    X = X_data.iloc[:, 3:len_X]
+    print(X.shape, Y.shape, len_X)
+
+    data_dmatrix = xgb.DMatrix(data=X, label=Y)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=123)
+    # Define initial best params and MAE
+    min_mae = float("Inf")
+    gridsearch_params = [
+            (max_depth, min_child_weight,subsample, colsample)
+            for max_depth in range(5, 15)
+            for min_child_weight in range(5, 15)
+            for subsample in [i / 10. for i in range(1, 11)]
+            for colsample in [i / 10. for i in range(1, 11)]]
+    best_params = None
+
+    for max_depth, min_child_weight,subsample, colsample in gridsearch_params:
+        print("CV with max_depth={}, min_child_weight={}".format(
+            max_depth,
+            min_child_weight))
+        print("CV with subsample={}, colsample={}".format(
+            subsample,
+            colsample))
+
+        # Update our parameters
+        params['max_depth'] = max_depth
+        params['min_child_weight'] = min_child_weight
+        params['subsample'] = subsample
+        params['colsample_bytree'] = colsample
+
+        # Run CV
+        cv_results = xgb.cv(
+            params,
+            data_dmatrix,
+            num_boost_round=num_boost_round,
+            seed=42,
+            nfold=5,
+            metrics={'mae'},
+            early_stopping_rounds=150
+        )
+
+        # Update best MAE
+        mean_mae = cv_results['test-mae-mean'].min()
+        boost_rounds = cv_results['test-mae-mean'].argmin()
+        print("\tMAE {} for {} rounds".format(mean_mae, boost_rounds))
+        if mean_mae < min_mae:
+            min_mae = mean_mae
+            best_params = (max_depth, min_child_weight, subsample, colsample)
+
+    print(
+        "Best params: {}, {}, MAE: {}".format(best_params[0], best_params[1], best_params[2], best_params[3], min_mae))
+
+
 def run_xgboost(X_data,Y_data):
     len_X = X_data.shape[1] - Y_data.shape[1]
     Y = X_data.iloc[:, -1]
@@ -49,26 +113,68 @@ def run_xgboost(X_data,Y_data):
     print(X.shape, Y.shape, len_X)
 
     data_dmatrix = xgb.DMatrix(data=X, label=Y)
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, random_state=123)
-    xg_reg = xgb.XGBRegressor(objective='reg:linear', colsample_bytree=0.3, learning_rate=0.1,
-                              max_depth=5, alpha=10, n_estimators=10)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=123)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    num_boost_round = 10000
 
+    params = {
+        # Parameters that we are going to tune.
+        'max_depth': 3,
+        'min_child_weight': 1,
+        'eta': .01,
+        'subsample': 0.4,
+        'colsample_bytree': 0.2,
+        'learning_rate' : 0.01,
+        'objective' : 'reg:squaredlogerror'
+       # 'objective': 'reg:squarederror',
+    }
+
+    model = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=num_boost_round,
+        evals=[(dtest, "Test")],
+        early_stopping_rounds=300
+    )
+    print("Best MAE: {:.2f} in {} rounds".format(model.best_score, model.best_iteration + 1))
+
+    '''
+    xg_reg = xgb.XGBRegressor(objective='reg:squaredlogerror', colsample_bytree=0.2, gamma=0, subsample=0.4,
+                              learning_rate=0.01,
+                              max_depth=10, alpha=10, n_estimators=200)
     xg_reg.fit(X_train, y_train)
 
+    cv_results = xgb.cv(
+        params,
+        data_dmatrix,
+        num_boost_round=num_boost_round,
+        seed=42,
+        nfold=5,
+        metrics={'rmse'},
+        early_stopping_rounds=150
+    )
+    print(cv_results)
+    '''
+
     plt.rcParams['figure.figsize'] = 60, 20
-    xgb.plot_tree(xg_reg, num_trees=0)
-    plt.show()
+    xgb.plot_tree(model, num_trees=0)
+    #plt.show()
 
-    preds = xg_reg.predict(X_test)
+    preds = model.predict(dtest)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
-
-    xgb.plot_importance(xg_reg)
-    print(xg_reg.get_booster().get_score(importance_type="gain"))
-    plt.rcParams['figure.figsize'] = [5, 5]
     print("RMSE: %f" % (rmse))
-    plt.show()
 
+    mean_train = np.mean(y_train)
+    baseline_predictions = np.ones(y_test.shape) * mean_train
+    mae_baseline = mean_absolute_error(y_test, baseline_predictions)
+    print("Baseline MAE is {:.2f}".format(mae_baseline))
 
+    xgb.plot_importance(model)
+    #print(xg_reg.get_booster().get_score(importance_type="gain"))
+    print(model.get_score(importance_type="gain"))
+    plt.rcParams['figure.figsize'] = [5, 5]
+    #plt.show()
 
 
 def main():
