@@ -18,7 +18,6 @@ from datetime import timedelta
 import math
 from bokeh.models import ColumnDataSource, CustomJS, Slider
 from bokeh.sampledata.us_states import data as states
-from bokeh.sampledata.unemployment import data as unemployment
 from bokeh.models import Slider, CustomJS, DateSlider
 from bokeh.models import LogColorMapper
 from bokeh.palettes import Magma256
