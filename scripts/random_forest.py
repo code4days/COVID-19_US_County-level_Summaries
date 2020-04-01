@@ -17,7 +17,6 @@ from xgboost import plot_importance
 from sklearn.tree import DecisionTreeClassifier # Import Decision Tree Classifier
 from sklearn.tree import DecisionTreeRegressor
 from pylab import rcParams
-rcParams['figure.figsize'] = 60, 20
 os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
 
 
@@ -55,10 +54,17 @@ def run_xgboost(X_data,Y_data):
                               max_depth=5, alpha=10, n_estimators=10)
 
     xg_reg.fit(X_train, y_train)
+
+    plt.rcParams['figure.figsize'] = 60, 20
     xgb.plot_tree(xg_reg, num_trees=0)
+    plt.show()
 
     preds = xg_reg.predict(X_test)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
+
+    xgb.plot_importance(xg_reg)
+    print(xg_reg.get_booster().get_score(importance_type="gain"))
+    plt.rcParams['figure.figsize'] = [5, 5]
     print("RMSE: %f" % (rmse))
     plt.show()
 
