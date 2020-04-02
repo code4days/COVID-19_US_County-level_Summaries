@@ -20,11 +20,12 @@ from sklearn.tree import DecisionTreeRegressor
 from pylab import rcParams
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import mean_absolute_error
+import shap
 os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
 
 
 def create_confirmed_dict(data_dir):
-    filename = join(data_dir, 'infections_timeseries.csv')
+    filename = join(data_dir, 'deaths_timeseries.csv')
     df = pd.read_csv(filename, dtype={"FIPS": int})
     df['FIPS'] = df['FIPS'].apply(lambda x: str(x).zfill(5))
     return df
@@ -60,11 +61,22 @@ def grid_search(X_data,Y_data):
     data_dmatrix = xgb.DMatrix(data=X, label=Y)
     X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=123)
     # Define initial best params and MAE
+    params = {
+        # Parameters that we are going to tune.
+        'max_depth': 3,
+        'min_child_weight': 1,
+        'eta': .01,
+        'subsample': 0.4,
+        'colsample_bytree': 0.2,
+        'learning_rate': 0.01,
+        'objective': 'reg:squaredlogerror'
+    }
     min_mae = float("Inf")
+    num_boost_round = 100
     gridsearch_params = [
             (max_depth, min_child_weight,subsample, colsample)
-            for max_depth in range(5, 15)
-            for min_child_weight in range(5, 15)
+            for max_depth in range(1, 5)
+            for min_child_weight in range(1, 5)
             for subsample in [i / 10. for i in range(1, 11)]
             for colsample in [i / 10. for i in range(1, 11)]]
     best_params = None
@@ -113,14 +125,14 @@ def run_xgboost(X_data,Y_data):
     print(X.shape, Y.shape, len_X)
 
     data_dmatrix = xgb.DMatrix(data=X, label=Y)
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=123)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, random_state=123)
     dtest = xgb.DMatrix(X_test, label=y_test)
     dtrain = xgb.DMatrix(X_train, label=y_train)
-    num_boost_round = 10000
+    num_boost_round = 500
 
     params = {
         # Parameters that we are going to tune.
-        'max_depth': 3,
+        'max_depth': 4,
         'min_child_weight': 1,
         'eta': .01,
         'subsample': 0.4,
@@ -158,13 +170,20 @@ def run_xgboost(X_data,Y_data):
     '''
 
     plt.rcParams['figure.figsize'] = 60, 20
-    xgb.plot_tree(model, num_trees=0)
-    #plt.show()
+    xgb.plot_tree(model, num_trees=1)
+    plt.show()
 
-    preds = model.predict(dtest)
-    rmse = np.sqrt(mean_squared_error(y_test, preds))
+    # accuracy
+    y_pred = model.predict(dtest)
+    predictions = [round(value) for value in y_pred]
+    accuracy = accuracy_score(y_test, predictions)
+    print("Accuracy: %.2f%%" % (accuracy * 100.0))
+
+    # rmse
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
     print("RMSE: %f" % (rmse))
 
+    # mae
     mean_train = np.mean(y_train)
     baseline_predictions = np.ones(y_test.shape) * mean_train
     mae_baseline = mean_absolute_error(y_test, baseline_predictions)
@@ -174,7 +193,34 @@ def run_xgboost(X_data,Y_data):
     #print(xg_reg.get_booster().get_score(importance_type="gain"))
     print(model.get_score(importance_type="gain"))
     plt.rcParams['figure.figsize'] = [5, 5]
-    #plt.show()
+    plt.show()
+
+    # explain the model's predictions using SHAP
+    shap_values = shap.TreeExplainer(model).shap_values(X_train)
+    shap.summary_plot(shap_values, X_test, plot_type="bar")
+    X = X_train
+    feat_df = pd.DataFrame(sorted(model.get_fscore().items(),
+                                  key=lambda x: x[1],
+                                  reverse=True),
+                           columns=['Feature',
+                                    'Importance'])
+
+    feats = feat_df.sort_values('Importance')[::-1]['Feature'].head(15)
+
+    column_index = []
+    new_shap_ar = []
+    new_X = []
+    for c in feats.values:
+        column_index = list(X.columns).index(c)
+        new_shap_ar.append(shap_values[:, column_index:column_index + 1])
+        new_X.append(X.iloc[:, column_index])
+
+    new_X = pd.concat(new_X, axis=1)
+    new_shap_ar = np.hstack(new_shap_ar)
+
+    shap.summary_plot(new_shap_ar, new_X)
+    #shap.force_plot(explainer.expected_value, shap_values[10,:], X_test.iloc[10,:])
+
 
 
 def main():
@@ -187,6 +233,7 @@ def main():
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
 
     run_xgboost(df,confirmed_dict)
+    #grid_search(df,confirmed_dict)
 
 
 if __name__ == '__main__':
