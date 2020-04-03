@@ -21,8 +21,16 @@ from pylab import rcParams
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import mean_absolute_error
 import shap
-os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
+from sklearn.model_selection import train_test_split
+import seaborn as sns
+import umap
 
+from bokeh.plotting import figure, show, output_file
+from bokeh.models import HoverTool, ColumnDataSource, CategoricalColorMapper, ContinuousColorMapper, LinearColorMapper, LabelSet
+from bokeh.palettes import brewer
+
+os.environ["PATH"] += os.pathsep + 'D:/Program Files (x86)/Graphviz2.38/bin/'
+sns.set(style='white', context='notebook', rc={'figure.figsize':(14,10)})
 
 def create_confirmed_dict(data_dir):
     filename = join(data_dir, 'deaths_timeseries.csv')
@@ -44,12 +52,6 @@ def get_last_date(df):
     last_day_str = col_names[len_col - 1]
     last_day = datetime.strptime(last_day_str, '%Y-%m-%d %H:%M:%S').date()
     return last_day
-
-
-def exponentialLoss(y, pred):
-    df = -y * np.exp(-y * pred)
-    hess = np.exp(-y * pred)
-    return df, hess
 
 
 def grid_search(X_data,Y_data):
@@ -113,9 +115,8 @@ def grid_search(X_data,Y_data):
         if mean_mae < min_mae:
             min_mae = mean_mae
             best_params = (max_depth, min_child_weight, subsample, colsample)
-
-    print(
-        "Best params: {}, {}, MAE: {}".format(best_params[0], best_params[1], best_params[2], best_params[3], min_mae))
+    print("Best params:")
+    print(best_params)
 
 
 def run_xgboost(X_data,Y_data):
@@ -133,7 +134,7 @@ def run_xgboost(X_data,Y_data):
     params = {
         # Parameters that we are going to tune.
         'max_depth': 4,
-        'min_child_weight': 1,
+        'min_child_weight': 4, #1
         'eta': .01,
         'subsample': 0.4,
         'colsample_bytree': 0.2,
@@ -222,6 +223,68 @@ def run_xgboost(X_data,Y_data):
     #shap.force_plot(explainer.expected_value, shap_values[10,:], X_test.iloc[10,:])
 
 
+def run_umap(X_data,Y_data):
+    len_X = X_data.shape[1] - Y_data.shape[1]
+    Y = X_data.iloc[:, -1]
+    X = X_data.iloc[:, 3:len_X]
+    print(X.shape, Y.shape, len_X)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, random_state=123)
+
+    reducer = umap.UMAP()
+    embedding = reducer.fit_transform(X_train, y=y_train)
+    print(embedding.shape)
+
+    #test_embedding = reducer.transform(X_test)
+    plt.scatter(embedding[:, 0], embedding[:, 1])
+    plt.gca().set_aspect('equal', 'datalim')
+    plt.title('UMAP projection of demographics', fontsize=24)
+    #plt.show()
+
+    df = pd.DataFrame(embedding, columns=('x', 'y'))
+    df['class_num'] = [str(x) for x in y_train]
+
+    datasource = ColumnDataSource(df)
+    #color_mapping = CategoricalColorMapper(factors=[str(9 - x) for x in np.unique(labels)],
+    #                                       palette=Spectral10)
+    palette = brewer['Set1'][6]
+
+    color_mapping = LinearColorMapper(palette=palette, low=0, high=100)
+
+    plot_figure = figure(
+        title='UMAP projection of demographics data',
+        plot_width=800,
+        plot_height=600,
+        tools=('pan, wheel_zoom, reset')
+    )
+
+    plot_figure.add_tools(HoverTool(tooltips="""
+    <div>
+        <div>
+            <span style='font-size: 16px; color: #224499'>Class:</span>
+            <span style='font-size: 18px'>@class_num</span>
+        </div>
+    </div>
+    """))
+
+    plot_figure.circle(
+        'x',
+        'y',
+        source=datasource,
+        color=dict(field='class_num', transform=color_mapping),
+        line_alpha=0.6,
+        fill_alpha=0.6,
+        size=4
+    )
+
+    labels = LabelSet(x='x', y='y', text="class_num", y_offset=2,
+                      text_font_size="8pt", text_color="#555555",
+                      source=datasource, text_align='center')
+    plot_figure.add_layout(labels)
+
+    show(plot_figure)
+    output_file("umap.html", title="Umap projections")
+
 
 def main():
     data_dir = r"D:\JHU\corona\disease_spread\data"
@@ -232,8 +295,9 @@ def main():
     df = counties_dict.merge(confirmed_dict, on='FIPS', how='inner')
     df = df[~df.isin([np.nan, np.inf, -np.inf]).any(1)]
 
-    run_xgboost(df,confirmed_dict)
-    #grid_search(df,confirmed_dict)
+    #run_xgboost(df, confirmed_dict)
+    run_umap(df, confirmed_dict)
+    #grid_search(df, confirmed_dict)
 
 
 if __name__ == '__main__':
